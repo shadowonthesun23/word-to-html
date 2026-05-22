@@ -1,19 +1,24 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import mammoth from 'mammoth';
 
 export default function Home() {
   const [htmlOutput, setHtmlOutput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [fileName, setFileName] = useState('');
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef(null);
 
-  const processDocx = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  const processFile = async (file) => {
+    if (!file || !file.name.endsWith('.docx')) {
+      alert("Seleziona un file valido con estensione .docx");
+      return;
+    }
 
     setFileName(file.name);
     setIsProcessing(true);
+    setHtmlOutput('');
 
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -23,14 +28,14 @@ export default function Home() {
         const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
         let rawHtml = result.value;
 
-        // 1. Formattazione Strutturale e Semantica dei metadati
+        // 1. Formattazione dei metadati e dei titoli principali
         rawHtml = rawHtml.replace(/<p>Nell’archivio([^<]+)<\/p>/g, '<h1>Nell’archivio$1</h1>');
         rawHtml = rawHtml.replace(/<p>Un terrazzo([^<]+)<\/p>/g, '<h2>Un terrazzo$1</h2>');
         rawHtml = rawHtml.replace(/<p>(Laura De Luca)<\/p>/g, '<div class="meta">$1</div>');
         rawHtml = rawHtml.replace(/<p>(\d{1,2}\s\w+\s\d{4})<\/p>/g, '<div class="meta">$1</div>');
         rawHtml = rawHtml.replace(/<p>(IERI OGGI, LETTURE)<\/p>/g, '<div class="category">$1</div>');
 
-        // Gestione dell'immagine e della didascalia consecutiva
+        // Gestione blocco immagine e relativa didascalia consecutiva
         rawHtml = rawHtml.replace(/<p>\[Image \d+\]<\/p>\s*<p>(Immagine di copertina:[^<]+)<\/p>/g, 
           `<div class="image-container">
               <img src="copertina.jpg" alt="Immagine di copertina">
@@ -38,38 +43,56 @@ export default function Home() {
            </div>`
         );
 
-        // 2. Parsificazione dinamica dei Link senza vincoli di testo fisso
-        const paragraphRegex = /<p>(.*?)(https?:\/\/[^\s<]+)(.*?)<\/p>/g;
-        
-        rawHtml = rawHtml.replace(paragraphRegex, (match, beforeText, url, afterText) => {
-          const cleanUrl = url.replace(/[)., ]$/, '');
-          let nomeLink = beforeText.trim();
-          let cleanBefore = "";
+        // 2. PARSING DEI LINK OTTIMIZZATO (Elimina il blocco del browser)
+        // Usiamo un approccio basato sul DOM virtuale del browser invece delle regex pesanti
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(`<div>${rawHtml}</div>`, 'text/html');
+        const paragraphs = doc.querySelectorAll('p');
 
-          // Isola le ultime parole prima del link come ancora ipertestuale
-          if (nomeLink.endsWith("un libro")) {
-            cleanBefore = nomeLink.slice(0, -8);
-            nomeLink = "un libro";
-          } else if (nomeLink.endsWith("Gustaw Herling")) {
-            cleanBefore = nomeLink.slice(0, -14);
-            nomeLink = "Gustaw Herling";
-          } else if (nomeLink.endsWith("sito di Laura De Luca")) {
-            cleanBefore = nomeLink.slice(0, -21);
-            nomeLink = "sito di Laura De Luca";
-          } else {
-            const words = nomeLink.split(' ');
-            if (words.length > 4) {
-              nomeLink = words.slice(-4).join(' ');
-              cleanBefore = words.slice(0, -4).join(' ') + ' ';
+        paragraphs.forEach((p) => {
+          const text = p.innerHTML;
+          // Trova solo la stringa dell'URL
+          const urlMatch = text.match(/https?:\/\/[^\s<]+/);
+          
+          if (urlMatch) {
+            const fullUrl = urlMatch[0];
+            const cleanUrl = fullUrl.replace(/[)., ]$/, ''); // Pulisce l'URL dalla punteggiatura finale
+            
+            // Isola la parte di testo prima dell'URL per identificare il nome
+            let beforeText = text.split(fullUrl)[0].trim();
+            let cleanBefore = "";
+            let nomeLink = beforeText;
+
+            // Rilevamento delle ancore ipertestuali note
+            if (beforeText.endsWith("un libro")) {
+              cleanBefore = beforeText.slice(0, -8);
+              nomeLink = "un libro";
+            } else if (beforeText.endsWith("Gustaw Herling")) {
+              cleanBefore = beforeText.slice(0, -14);
+              nomeLink = "Gustaw Herling";
+            } else if (beforeText.endsWith("sito di Laura De Luca")) {
+              cleanBefore = beforeText.slice(0, -21);
+              nomeLink = "sito di Laura De Luca";
             } else {
-              cleanBefore = "";
+              // Fallback: isola le ultime parole
+              const words = beforeText.split(' ');
+              if (words.length > 4) {
+                nomeLink = words.slice(-4).join(' ');
+                cleanBefore = words.slice(0, -4).join(' ') + ' ';
+              } else {
+                cleanBefore = "";
+              }
             }
-          }
 
-          return `<p>${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}</p>`;
+            const afterText = text.split(fullUrl)[1] || "";
+            // Ricostruisce il paragrafo con il link incorporato
+            p.innerHTML = `${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}`;
+          }
         });
 
-        // 3. Generazione del documento HTML finale
+        const processedBody = doc.querySelector('div').innerHTML;
+
+        // 3. Struttura del documento finale pronto per il download
         const finalHtml = `<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -90,7 +113,7 @@ export default function Home() {
     </style>
 </head>
 <body>
-    ${rawHtml}
+    ${processedBody}
 </body>
 </html>`;
 
@@ -106,8 +129,25 @@ export default function Home() {
     reader.readAsArrayBuffer(file);
   };
 
+  // Gestori eventi per il Drag and Drop funzionante
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files[0];
+    processFile(file);
+  };
+
   const handleDownload = () => {
-    const blob = new Blob([htmlOutput], { type: 'text/html' });
+    const blob = new Blob([htmlOutput], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -123,20 +163,33 @@ export default function Home() {
       <h1 style={{ fontSize: '28px', marginBottom: '10px' }}>Word to HTML Converter</h1>
       <p style={{ color: '#666', marginBottom: '30px' }}>Carica un file .docx per convertirlo in codice HTML pulito con link ipertestuali incorporati.</p>
       
-      <div style={{ border: '2px dashed #ccc', padding: '40px', textAlign: 'center', borderRadius: '8px', background: '#f9f9f9', marginBottom: '20px' }}>
+      <div 
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current.click()}
+        style={{ 
+          border: isDragOver ? '2px dashed #0070f3' : '2px dashed #ccc', 
+          padding: '40px', 
+          textAlign: 'center', 
+          borderRadius: '8px', 
+          background: isDragOver ? '#f0f7ff' : '#f9f9f9', 
+          marginBottom: '20px',
+          cursor: 'pointer',
+          transition: 'background 0.15s ease, border-color 0.15s ease'
+        }}
+      >
         <input 
           type="file" 
           accept=".docx" 
-          onChange={processDocx} 
-          id="file-upload" 
+          ref={fileInputRef}
+          onChange={(e) => processFile(e.target.files[0])} 
           style={{ display: 'none' }}
         />
-        <label htmlFor="file-upload" style={{ cursor: 'pointer', display: 'block' }}>
-          <span style={{ display: 'block', fontSize: '18px', fontWeight: 'bold', color: '#0070f3', marginBottom: '5px' }}>
-            {isProcessing ? 'Elaborazione in corso...' : 'Seleziona o trascina il file Word'}
-          </span>
-          <span style={{ fontSize: '14px', color: '#888' }}>Accetta solo formati .docx</span>
-        </label>
+        <span style={{ display: 'block', fontSize: '18px', fontWeight: 'bold', color: '#0070f3', marginBottom: '5px' }}>
+          {isProcessing ? 'Elaborazione in corso...' : 'Seleziona o trascina il file Word'}
+        </span>
+        <span style={{ fontSize: '14px', color: '#888' }}>Accetta solo formati .docx</span>
       </div>
 
       {fileName && <p style={{ fontSize: '14px', marginBottom: '20px' }}><strong>File:</strong> {fileName}</p>}
