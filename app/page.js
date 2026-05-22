@@ -28,74 +28,87 @@ export default function Home() {
       const arrayBuffer = event.target.result;
 
       try {
-        // Forza Mammoth a convertire il testo colorato in un tag specifico con classe CSS
+        // Forza Mammoth a mappare qualsiasi run di testo che ha un colore definito nel Word
+        // all'interno di un tag span con la classe identificativa 'word-red'
         const options = {
           styleMap: [
             "r[style*='color'] => span.word-red",
-            "r[style*='w:color'] => span.word-red"
+            "r[style*='w:color'] => span.word-red",
+            "r[color] => span.word-red"
           ]
         };
 
         const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer }, options);
         let rawHtml = result.value;
 
-        // 1. Pulizia drastica: raddrizza la struttura e rimuove le immagini
+        // 1. Rimozione preventiva delle immagini e dei relativi segnaposto testuali
         rawHtml = rawHtml.replace(/<p>\[Image \d+\]<\/p>/g, '');
         rawHtml = rawHtml.replace(/<p>Immagine di copertina:[^<]+<\/p>/g, '');
-        rawHtml = rawHtml.replace(/<img>.*?<\/img>/g, '');
-        rawHtml = rawHtml.replace(/<img.*? \/>/g, '');
+        rawHtml = rawHtml.replace(/<img[^>]*>/g, '');
 
-        // 2. Parsing dei blocchi tramite DOMParser
+        // 2. Parsing strutturale basato su nodi HTML reali
         const parser = new DOMParser();
         const doc = parser.parseFromString(`<div>${rawHtml}</div>`, 'text/html');
-        
-        // Esaminiamo tutti i contenitori di testo (paragrafi e titoli)
-        const containers = doc.querySelectorAll('p, h1, h2, h3');
+        const paragraphs = doc.querySelectorAll('p');
 
-        containers.forEach((container) => {
-          // Cerca all'interno dell'elemento i blocchi di testo identificati come rossi da Mammoth
-          const redSpans = container.querySelectorAll('span.word-red');
+        paragraphs.forEach((p) => {
+          // Trova l'URL all'interno del paragrafo
+          const paragraphText = p.textContent;
+          const urlMatch = paragraphText.match(/https?:\/\/[^\s]+/);
           
-          redSpans.forEach((span) => {
-            const nomeInRosso = span.textContent.trim();
-            if (!nomeInRosso) return;
+          if (urlMatch) {
+            const fullUrl = urlMatch[0];
+            const cleanUrl = fullUrl.replace(/[)., ]$/, ''); // Pulisce l'URL dalla punteggiatura finale
 
-            // Trova il testo successivo all'interno dello stesso paragrafo per estrarre l'URL adiacente
-            const htmlContent = container.innerHTML;
-            const spanOuterHTML = span.outerHTML;
-            const parts = htmlContent.split(spanOuterHTML);
+            // Troviamo lo span rosso che si trova immediatamente prima dell'URL.
+            // Poiché Word potrebbe spezzare una frase rossa in più span consecutivi,
+            // raccogliamo gli elementi span.word-red interni a questo paragrafo.
+            const redSpans = p.querySelectorAll('span.word-red');
             
-            if (parts.length > 1) {
-              const textAfter = parts[1];
-              // Regex per catturare l'URL immediatamente successivo al blocco rosso
-              const urlMatch = textAfter.match(/^\s*(https?:\/\/[^\s<]+)/);
-              
-              if (urlMatch) {
-                const fullUrl = urlMatch[0];
-                const cleanUrl = fullUrl.replace(/[)., ]$/, '').trim();
+            if (redSpans.length > 0) {
+              // Ricostruiamo l'intero testo rosso unendo il contenuto degli span rilevati
+              let testoRossoCompleto = "";
+              redSpans.forEach(span => {
+                testoRossoCompleto += span.textContent;
+              });
+
+              testoRossoCompleto = testoRossoCompleto.trim();
+
+              if (testoRossoCompleto) {
+                // Isola la parte di testo prima del blocco rosso (se esiste) e quella dopo l'URL
+                const plainText = p.textContent;
+                const redIndex = plainText.indexOf(testoRossoCompleto);
+                const beforeText = plainText.substring(0, redIndex);
                 
-                // Genera l'ipertesto incorporato mantenendo il colore rosso tramite CSS
-                const newLinkHTML = `<a href="${cleanUrl}" class="red-link" target="_blank">${nomeInRosso}</a>`;
-                
-                // Ricostruisce il contenuto del paragrafo eliminando l'URL testuale visibile
-                container.innerHTML = container.innerHTML.replace(spanOuterHTML + urlMatch[1], newLinkHTML);
+                const urlIndex = plainText.indexOf(fullUrl);
+                const afterText = plainText.substring(urlIndex + fullUrl.length);
+
+                // Genera il tag ipertestuale sul blocco rosso completo, eliminando l'URL visibile
+                p.innerHTML = `${beforeText}<a href="${cleanUrl}" class="red-link" target="_blank">${testoRossoCompleto}</a>${afterText}`;
               }
+            } else {
+              // Fallback di sicurezza: se per qualsiasi motivo il colore non viene mappato,
+              // isola l'indice e applica il link alla stringa precedente
+              const urlIndex = paragraphText.indexOf(fullUrl);
+              const beforeText = paragraphText.substring(0, urlIndex).trim();
+              const afterText = paragraphText.substring(urlIndex + fullUrl.length);
+              p.innerHTML = `<a href="${cleanUrl}" class="red-link" target="_blank">${beforeText}</a>${afterText}`;
             }
-          });
+          }
         });
 
-        // 3. Normalizzazione della gerarchia del documento HTML
-        const allParagraphs = doc.querySelectorAll('p');
-        if (allParagraphs.length > 0 && !allParagraphs[0].querySelector('a')) {
-          allParagraphs[0].outerHTML = `<h1>${allParagraphs[0].innerHTML}</h1>`;
+        // 3. Normalizzazione dei primi due blocchi di testo come h1 e h2
+        const allElements = doc.querySelectorAll('p');
+        if (allElements.length > 0 && !allElements[0].querySelector('a')) {
+          allElements[0].outerHTML = `<h1>${allElements[0].innerHTML}</h1>`;
         }
-        if (allParagraphs.length > 1 && !allParagraphs[1].querySelector('a')) {
-          allParagraphs[1].outerHTML = `<h2>${allParagraphs[1].innerHTML}</h2>`;
+        if (allElements.length > 1 && !allElements[1].querySelector('a')) {
+          allElements[1].outerHTML = `<h2>${allElements[1].innerHTML}</h2>`;
         }
 
         const processedBody = doc.querySelector('div').innerHTML;
 
-        // 4. Output strutturato finale (Solo testo e link)
+        // 4. Generazione del file HTML finale auto-contenitivo
         htmlDataRef.current = `<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -131,7 +144,7 @@ export default function Home() {
     <main style={{ fontFamily: 'sans-serif', maxWidth: '600px', margin: '60px auto', padding: '0 20px' }}>
       <h1 style={{ fontSize: '26px', marginBottom: '10px', color: '#111' }}>Word to HTML Converter</h1>
       <p style={{ color: '#666', marginBottom: '30px', fontSize: '15px' }}>
-        Carica un file .docx. Lo script rileva le parole scritte in rosso, incorpora l'URL adiacente e rimuove il testo del link visibile.
+        Carica un file .docx. L'applicazione rileva il testo formattato in rosso, incorpora l'URL adiacente eliminando il link visibile.
       </p>
       
       <div 
@@ -158,9 +171,9 @@ export default function Home() {
           style={{ display: 'none' }}
         />
         <span style={{ display: 'block', fontSize: '17px', fontWeight: 'bold', color: '#0070f3', marginBottom: '5px' }}>
-          {isProcessing ? 'Elaborazione in corso...' : 'Seleziona o trascina il file Word'}
+          {isProcessing ? 'Elaborazione...' : 'Seleziona o trascina il file Word'}
         </span>
-        <span style={{ fontSize: '13px', color: '#888' }}>Accetta esclusivamente file .docx</span>
+        <span style={{ fontSize: '13px', color: '#888' }}>Supporta esclusivamente file .docx</span>
       </div>
 
       {fileName && (
@@ -173,7 +186,7 @@ export default function Home() {
       {hasResult && (
         <div style={{ textAlign: 'center', marginTop: '10px' }}>
           <div style={{ padding: '15px', background: '#e6f4ea', color: '#137333', borderRadius: '8px', fontWeight: 'bold', marginBottom: '20px', fontSize: '15px' }}>
-            ✓ Conversione completata!
+            ✓ Conversione completata con successo!
           </div>
           <button 
             onClick={() => {
@@ -201,7 +214,7 @@ export default function Home() {
               width: '100%'
             }}
           >
-            Scarica l'HTML pulito
+            Scarica il file HTML pulito
           </button>
         </div>
       )}
