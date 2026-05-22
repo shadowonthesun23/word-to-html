@@ -25,7 +25,34 @@ export default function Home() {
       const arrayBuffer = event.target.result;
 
       try {
-        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+        // Opzioni di conversione per ripulire i testi dai link visibili duplicati
+        const options = {
+          transformDocument: (element) => {
+            if (element.children) {
+              element.children = element.children.map(child => {
+                // Se un paragrafo contiene un link testuale esplicito, puliamo il testo visibile redundante
+                if (child.type === "paragraph") {
+                  const fullText = child.children.map(c => c.value || "").join("");
+                  const urlMatch = fullText.match(/https?:\/\/[^\s]+/);
+                  
+                  if (urlMatch) {
+                    const urlStr = urlMatch[0];
+                    child.children.forEach(run => {
+                      if (run.value && run.value.includes(urlStr)) {
+                        // Rimuoviamo l'URL visibile dal testo puro del Word
+                        run.value = run.value.replace(urlStr, "").trim();
+                      }
+                    });
+                  }
+                }
+                return child;
+              });
+            }
+            return element;
+          }
+        };
+
+        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer }, options);
         let rawHtml = result.value;
 
         // 1. Formattazione dei metadati e dei titoli principali
@@ -43,30 +70,24 @@ export default function Home() {
            </div>`
         );
 
-        // 2. PARSING DEI LINK LINEARE (Previene i blocchi del browser)
+        // 2. PARSING DEI LINK PULITO SENZA SPLIT O LOOP COMPLESSI
         const parser = new DOMParser();
         const doc = parser.parseFromString(`<div>${rawHtml}</div>`, 'text/html');
-        const paragraphs = doc.querySelectorAll('p');
-
-        paragraphs.forEach((p) => {
-          const plainText = p.textContent;
-          // Regex ultra-leggera per trovare l'URL nel testo pulito
-          const urlMatch = plainText.match(/https?:\/\/[^\s]+/);
+        
+        // Estraiamo tutti i paragrafi che contengono ancora un residuo di URL o l'intera riga
+        doc.querySelectorAll('p').forEach((p) => {
+          const text = p.innerHTML;
+          const urlMatch = text.match(/https?:\/\/[^\s<]+/);
           
           if (urlMatch) {
             const fullUrl = urlMatch[0];
-            // Pulisce l'URL da punteggiatura finale attaccata (es. parentesi o punti)
-            const cleanUrl = fullUrl.replace(/[)., ]$/, ''); 
-            
-            // Trova la posizione dell'URL nel testo puro
-            const urlIndex = plainText.indexOf(fullUrl);
-            const beforeText = plainText.substring(0, urlIndex).trim();
-            const afterText = plainText.substring(urlIndex + fullUrl.length);
+            const cleanUrl = fullUrl.replace(/[)., ]$/, '');
+            let beforeText = text.substring(0, text.indexOf(fullUrl)).trim();
+            let afterText = text.substring(text.indexOf(fullUrl) + fullUrl.length);
 
             let nomeLink = beforeText;
             let cleanBefore = "";
 
-            // Riconoscimento delle ancore ipertestuali
             if (beforeText.endsWith("un libro")) {
               cleanBefore = beforeText.slice(0, -8);
               nomeLink = "un libro";
@@ -77,7 +98,6 @@ export default function Home() {
               cleanBefore = beforeText.slice(0, -21);
               nomeLink = "sito di Laura De Luca";
             } else {
-              // Fallback: isola le ultime parole prima del link
               const words = beforeText.split(' ');
               if (words.length > 4) {
                 nomeLink = words.slice(-4).join(' ');
@@ -87,14 +107,13 @@ export default function Home() {
               }
             }
 
-            // Ricostruisce il paragrafo in modo sicuro senza rompere stringhe HTML
             p.innerHTML = `${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}`;
           }
         });
 
         const processedBody = doc.querySelector('div').innerHTML;
 
-        // 3. Struttura del documento finale pronto per il download
+        // 3. Generazione del documento HTML finale pronto per il download
         const finalHtml = `<!DOCTYPE html>
 <html lang="it">
 <head>
