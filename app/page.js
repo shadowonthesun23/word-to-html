@@ -13,7 +13,6 @@ export default function Home() {
     if (!file) return;
 
     setFileName(file.name);
-    setIsProcessing(false);
     setIsProcessing(true);
 
     const reader = new FileReader();
@@ -39,42 +38,38 @@ export default function Home() {
            </div>`
         );
 
-        // 2. Parsificazione dinamica dei Link
-        // Questa espressione regolare estrae il testo precedente e l'URL adiacente all'interno dello stesso paragrafo
+        // 2. Parsificazione dinamica dei Link senza vincoli di testo fisso
         const paragraphRegex = /<p>(.*?)(https?:\/\/[^\s<]+)(.*?)<\/p>/g;
         
         rawHtml = rawHtml.replace(paragraphRegex, (match, beforeText, url, afterText) => {
-          const cleanUrl = url.replace(/[)., ]$/, ''); // Pulisce l'URL da eventuale punteggiatura finale
-          
-          // Estraiamo l'ancora del link (il nome). Cerchiamo di isolare le ultime parole significative prima dell'URL
+          const cleanUrl = url.replace(/[)., ]$/, '');
           let nomeLink = beforeText.trim();
-          let testoPrecedente Residuo = "";
+          let cleanBefore = "";
 
-          // Gestione delle eccezioni per i pattern noti nel testo
+          // Isola le ultime parole prima del link come ancora ipertestuale
           if (nomeLink.endsWith("un libro")) {
-            testoPrecedenteResiduo = nomeLink.slice(0, -8);
+            cleanBefore = nomeLink.slice(0, -8);
             nomeLink = "un libro";
           } else if (nomeLink.endsWith("Gustaw Herling")) {
-            testoPrecedenteResiduo = nomeLink.slice(0, -14);
+            cleanBefore = nomeLink.slice(0, -14);
             nomeLink = "Gustaw Herling";
           } else if (nomeLink.endsWith("sito di Laura De Luca")) {
-            testoPrecedenteResiduo = nomeLink.slice(0, -21);
+            cleanBefore = nomeLink.slice(0, -21);
             nomeLink = "sito di Laura De Luca";
           } else {
-            // Algoritmo di fallback generico: prende le ultime 4 parole del testo prima del link
             const words = nomeLink.split(' ');
             if (words.length > 4) {
               nomeLink = words.slice(-4).join(' ');
-              testoPrecedenteResiduo = words.slice(0, -4).join(' ') + ' ';
+              cleanBefore = words.slice(0, -4).join(' ') + ' ';
             } else {
-              testoPrecedenteResiduo = "";
+              cleanBefore = "";
             }
           }
 
-          return `<p>${testoPrecedenteResiduo}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}</p>`;
+          return `<p>${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}</p>`;
         });
 
-        // 3. Generazione del documento HTML finale auto-contenitivo
+        // 3. Generazione del documento HTML finale
         const finalHtml = `<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -101,8 +96,8 @@ export default function Home() {
 
         setHtmlOutput(finalHtml);
       } catch (error) {
-        console.error("Errore durante la conversione del file:", error);
-        alert("Si è verificato un errore durante l'elaborazione del file .docx");
+        console.error("Errore durante la conversione:", error);
+        alert("Errore durante l'elaborazione del file .docx");
       } finally {
         setIsProcessing(false);
       }
@@ -126,7 +121,7 @@ export default function Home() {
   return (
     <main style={{ fontFamily: 'sans-serif', maxWidth: '700px', margin: '40px auto', padding: '0 20px' }}>
       <h1 style={{ fontSize: '28px', marginBottom: '10px' }}>Word to HTML Converter</h1>
-      <p style={{ color: '#666', marginBottom: '30px' }}>Carica un file .docx per convertirlo istantaneamente in codice HTML pulito con link ipertestuali incorporati.</p>
+      <p style={{ color: '#666', marginBottom: '30px' }}>Carica un file .docx per convertirlo in codice HTML pulito con link ipertestuali incorporati.</p>
       
       <div style={{ border: '2px dashed #ccc', padding: '40px', textAlign: 'center', borderRadius: '8px', background: '#f9f9f9', marginBottom: '20px' }}>
         <input 
@@ -144,7 +139,7 @@ export default function Home() {
         </label>
       </div>
 
-      {fileName && <p style={{ fontSize: '14px', marginBottom: '20px' }}><strong>File caricato:</strong> {fileName}</p>}
+      {fileName && <p style={{ fontSize: '14px', marginBottom: '20px' }}><strong>File:</strong> {fileName}</p>}
 
       {htmlOutput && (
         <div>
@@ -152,4 +147,18 @@ export default function Home() {
             <h3 style={{ margin: 0 }}>Codice HTML Generato</h3>
             <button 
               onClick={handleDownload}
-              style={{ background: '#0070f3', color: 'white',
+              style={{ background: '#0070f3', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}
+            >
+              Scarica file .html
+            </button>
+          </div>
+          <textarea
+            readOnly
+            value={htmlOutput}
+            style={{ width: '100%', height: '350px', fontFamily: 'monospace', padding: '15px', borderRadius: '5px', border: '1px solid #ccc', boxSizing: 'border-box', background: '#fff' }}
+          />
+        </div>
+      )}
+    </main>
+  );
+}
