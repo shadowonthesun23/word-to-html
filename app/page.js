@@ -28,76 +28,72 @@ export default function Home() {
       const arrayBuffer = event.target.result;
 
       try {
-        // Forza Mammoth a mappare qualsiasi run di testo che ha un colore definito nel Word
-        // all'interno di un tag span con la classe identificativa 'word-red'
-        const options = {
-          styleMap: [
-            "r[style*='color'] => span.word-red",
-            "r[style*='w:color'] => span.word-red",
-            "r[color] => span.word-red"
-          ]
-        };
-
-        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer }, options);
+        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
         let rawHtml = result.value;
 
-        // 1. Rimozione preventiva delle immagini e dei relativi segnaposto testuali
+        // Pulizia immediata delle immagini
         rawHtml = rawHtml.replace(/<p>\[Image \d+\]<\/p>/g, '');
         rawHtml = rawHtml.replace(/<p>Immagine di copertina:[^<]+<\/p>/g, '');
         rawHtml = rawHtml.replace(/<img[^>]*>/g, '');
 
-        // 2. Parsing strutturale basato su nodi HTML reali
         const parser = new DOMParser();
         const doc = parser.parseFromString(`<div>${rawHtml}</div>`, 'text/html');
-        const paragraphs = doc.querySelectorAll('p');
+        const paragraphs = doc.querySelectorAll('p, h1, h2, h3');
 
         paragraphs.forEach((p) => {
-          // Trova l'URL all'interno del paragrafo
-          const paragraphText = p.textContent;
-          const urlMatch = paragraphText.match(/https?:\/\/[^\s]+/);
+          const text = p.textContent.trim();
+          const urlMatch = text.match(/https?:\/\/[^\s]+/);
           
           if (urlMatch) {
             const fullUrl = urlMatch[0];
-            const cleanUrl = fullUrl.replace(/[)., ]$/, ''); // Pulisce l'URL dalla punteggiatura finale
-
-            // Troviamo lo span rosso che si trova immediatamente prima dell'URL.
-            // Poiché Word potrebbe spezzare una frase rossa in più span consecutivi,
-            // raccogliamo gli elementi span.word-red interni a questo paragrafo.
-            const redSpans = p.querySelectorAll('span.word-red');
+            const cleanUrl = fullUrl.replace(/[)., ]$/, '');
+            const urlIndex = text.indexOf(fullUrl);
             
-            if (redSpans.length > 0) {
-              // Ricostruiamo l'intero testo rosso unendo il contenuto degli span rilevati
-              let testoRossoCompleto = "";
-              redSpans.forEach(span => {
-                testoRossoCompleto += span.textContent;
-              });
+            const beforeText = text.substring(0, urlIndex).trim();
+            const afterText = text.substring(urlIndex + fullUrl.length).trim();
 
-              testoRossoCompleto = testoRossoCompleto.trim();
+            if (beforeText) {
+              // LOGICA UNIVERSALE MULTI-PAROLA:
+              // Se la frase precedente contiene verbi di transizione come "un libro", "sito di", ecc.
+              // isoliamo solo la parte finale. Altrimenti, se prima dell'URL c'è un nome composto 
+              // (anche di 2, 3 o più parole come "Gustaw Herling" o "Nell'archivio del 900"), 
+              // l'intero blocco prima del link diventa l'ancora ipertestuale.
+              
+              let nomeLink = beforeText;
+              let cleanBefore = "";
 
-              if (testoRossoCompleto) {
-                // Isola la parte di testo prima del blocco rosso (se esiste) e quella dopo l'URL
-                const plainText = p.textContent;
-                const redIndex = plainText.indexOf(testoRossoCompleto);
-                const beforeText = plainText.substring(0, redIndex);
-                
-                const urlIndex = plainText.indexOf(fullUrl);
-                const afterText = plainText.substring(urlIndex + fullUrl.length);
+              // Riconoscimento dei marker di introduzione testo
+              const markers = [
+                { token: "un libro ", offset: 9 },
+                { token: "sul bel sito di ", offset: 16 },
+                { token: "sito di ", offset: 8 },
+                { token: "recensione di ", offset: 14 }
+              ];
 
-                // Genera il tag ipertestuale sul blocco rosso completo, eliminando l'URL visibile
-                p.innerHTML = `${beforeText}<a href="${cleanUrl}" class="red-link" target="_blank">${testoRossoCompleto}</a>${afterText}`;
+              let foundMarker = false;
+              for (let marker of markers) {
+                const index = beforeText.toLowerCase().lastIndexOf(marker.token);
+                if (index !== -1) {
+                  cleanBefore = beforeText.substring(0, index + marker.offset);
+                  nomeLink = beforeText.substring(index + marker.offset);
+                  foundMarker = true;
+                  break;
+                }
               }
-            } else {
-              // Fallback di sicurezza: se per qualsiasi motivo il colore non viene mappato,
-              // isola l'indice e applica il link alla stringa precedente
-              const urlIndex = paragraphText.indexOf(fullUrl);
-              const beforeText = paragraphText.substring(0, urlIndex).trim();
-              const afterText = paragraphText.substring(urlIndex + fullUrl.length);
-              p.innerHTML = `<a href="${cleanUrl}" class="red-link" target="_blank">${beforeText}</a>${afterText}`;
+
+              // Se non ci sono parole di transizione, l'intero testo precedente (es. un intero Titolo) 
+              // viene racchiuso nel tag <a> senza spezzare le parole rosse composte
+              if (!foundMarker) {
+                cleanBefore = "";
+                nomeLink = beforeText;
+              }
+
+              p.innerHTML = `${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a> ${afterText}`;
             }
           }
         });
 
-        // 3. Normalizzazione dei primi due blocchi di testo come h1 e h2
+        // Configurazione H1 e H2 automatica per i primi blocchi di testo puliti
         const allElements = doc.querySelectorAll('p');
         if (allElements.length > 0 && !allElements[0].querySelector('a')) {
           allElements[0].outerHTML = `<h1>${allElements[0].innerHTML}</h1>`;
@@ -108,7 +104,6 @@ export default function Home() {
 
         const processedBody = doc.querySelector('div').innerHTML;
 
-        // 4. Generazione del file HTML finale auto-contenitivo
         htmlDataRef.current = `<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -144,7 +139,7 @@ export default function Home() {
     <main style={{ fontFamily: 'sans-serif', maxWidth: '600px', margin: '60px auto', padding: '0 20px' }}>
       <h1 style={{ fontSize: '26px', marginBottom: '10px', color: '#111' }}>Word to HTML Converter</h1>
       <p style={{ color: '#666', marginBottom: '30px', fontSize: '15px' }}>
-        Carica un file .docx. L'applicazione rileva il testo formattato in rosso, incorpora l'URL adiacente eliminando il link visibile.
+        Carica un file .docx. Riconosce i blocchi di parole precedenti un URL e li converte in link ipertestuali eliminando le immagini.
       </p>
       
       <div 
@@ -184,7 +179,7 @@ export default function Home() {
       )}
 
       {hasResult && (
-        <div style={{ textAlign: 'center', marginTop: '10px' }}>
+        <div style={{ textAling: 'center', marginTop: '10px' }}>
           <div style={{ padding: '15px', background: '#e6f4ea', color: '#137333', borderRadius: '8px', fontWeight: 'bold', marginBottom: '20px', fontSize: '15px' }}>
             ✓ Conversione completata con successo!
           </div>
@@ -210,11 +205,10 @@ export default function Home() {
               cursor: 'pointer', 
               fontWeight: 'bold',
               fontSize: '16px',
-              boxShadow: '0 4px 14px rgba(0, 112, 243, 0.3)',
               width: '100%'
             }}
           >
-            Scarica il file HTML pulito
+            Scarica file HTML
           </button>
         </div>
       )}
