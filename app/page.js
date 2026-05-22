@@ -28,69 +28,74 @@ export default function Home() {
       const arrayBuffer = event.target.result;
 
       try {
-        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+        // Forza Mammoth a convertire il testo colorato in un tag specifico con classe CSS
+        const options = {
+          styleMap: [
+            "r[style*='color'] => span.word-red",
+            "r[style*='w:color'] => span.word-red"
+          ]
+        };
+
+        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer }, options);
         let rawHtml = result.value;
 
-        // 1. Assegnazione delle classi strutturali base alle righe note
-        rawHtml = rawHtml.replace(/<p>Nell’archivio([^<]+)<\/p>/g, '<h1>Nell’archivio$1</h1>');
-        rawHtml = rawHtml.replace(/<p>Un terrazzo([^<]+)<\/p>/g, '<h2>Un terrazzo$1</h2>');
-        rawHtml = rawHtml.replace(/<p>(Laura De Luca)<\/p>/g, '<div class="meta">$1</div>');
-        rawHtml = rawHtml.replace(/<p>(\d{1,2}\s\w+\s\d{4})<\/p>/g, '<div class="meta">$1</div>');
-        rawHtml = rawHtml.replace(/<p>(IERI OGGI, LETTURE)<\/p>/g, '<div class="category">$1</div>');
+        // 1. Pulizia drastica: raddrizza la struttura e rimuove le immagini
+        rawHtml = rawHtml.replace(/<p>\[Image \d+\]<\/p>/g, '');
+        rawHtml = rawHtml.replace(/<p>Immagine di copertina:[^<]+<\/p>/g, '');
+        rawHtml = rawHtml.replace(/<img>.*?<\/img>/g, '');
+        rawHtml = rawHtml.replace(/<img.*? \/>/g, '');
 
-        // 2. PARSING DI QUALSIASI LINK (Titoli, sottotitoli o paragrafi)
+        // 2. Parsing dei blocchi tramite DOMParser
         const parser = new DOMParser();
         const doc = parser.parseFromString(`<div>${rawHtml}</div>`, 'text/html');
         
-        // Seleziona tutti gli elementi di testo generati da Word
-        const elements = doc.querySelectorAll('p, h1, h2, div.meta, div.category');
+        // Esaminiamo tutti i contenitori di testo (paragrafi e titoli)
+        const containers = doc.querySelectorAll('p, h1, h2, h3');
 
-        elements.forEach((el) => {
-          const text = el.textContent;
-          // Individua la presenza di un URL
-          const urlMatch = text.match(/https?:\/\/[^\s]+/);
+        containers.forEach((container) => {
+          // Cerca all'interno dell'elemento i blocchi di testo identificati come rossi da Mammoth
+          const redSpans = container.querySelectorAll('span.word-red');
           
-          if (urlMatch) {
-            const fullUrl = urlMatch[0];
-            const cleanUrl = fullUrl.replace(/[)., ]$/, ''); // Rimuove punteggiatura finale dall'URL
-            const urlIndex = text.indexOf(fullUrl);
+          redSpans.forEach((span) => {
+            const nomeInRosso = span.textContent.trim();
+            if (!nomeInRosso) return;
+
+            // Trova il testo successivo all'interno dello stesso paragrafo per estrarre l'URL adiacente
+            const htmlContent = container.innerHTML;
+            const spanOuterHTML = span.outerHTML;
+            const parts = htmlContent.split(spanOuterHTML);
             
-            const beforeText = text.substring(0, urlIndex).trim();
-            const afterText = text.substring(urlIndex + fullUrl.length);
-
-            let nomeLink = beforeText;
-            let cleanBefore = "";
-
-            // Gestione intelligente dell'ancora del link basata sul testo precedente
-            if (beforeText.endsWith("un libro")) {
-              cleanBefore = beforeText.slice(0, -8);
-              nomeLink = "un libro";
-            } else if (beforeText.endsWith("Gustaw Herling")) {
-              cleanBefore = beforeText.slice(0, -14);
-              nomeLink = "Gustaw Herling";
-            } else if (beforeText.endsWith("sito di Laura De Luca")) {
-              cleanBefore = beforeText.slice(0, -21);
-              nomeLink = "sito di Laura De Luca";
-            } else {
-              // Se l'URL segue un intero titolo o una frase, usa le ultime parole o tutto il frammento precedente
-              const words = beforeText.split(' ');
-              if (words.length > 4) {
-                nomeLink = words.slice(-4).join(' ');
-                cleanBefore = words.slice(0, -4).join(' ') + ' ';
-              } else {
-                cleanBefore = "";
-                nomeLink = beforeText;
+            if (parts.length > 1) {
+              const textAfter = parts[1];
+              // Regex per catturare l'URL immediatamente successivo al blocco rosso
+              const urlMatch = textAfter.match(/^\s*(https?:\/\/[^\s<]+)/);
+              
+              if (urlMatch) {
+                const fullUrl = urlMatch[0];
+                const cleanUrl = fullUrl.replace(/[)., ]$/, '').trim();
+                
+                // Genera l'ipertesto incorporato mantenendo il colore rosso tramite CSS
+                const newLinkHTML = `<a href="${cleanUrl}" class="red-link" target="_blank">${nomeInRosso}</a>`;
+                
+                // Ricostruisce il contenuto del paragrafo eliminando l'URL testuale visibile
+                container.innerHTML = container.innerHTML.replace(spanOuterHTML + urlMatch[1], newLinkHTML);
               }
             }
-
-            // Ricostruisce il tag iniettando il link incorporato ed eliminando l'URL visibile
-            el.innerHTML = `${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}`;
-          }
+          });
         });
+
+        // 3. Normalizzazione della gerarchia del documento HTML
+        const allParagraphs = doc.querySelectorAll('p');
+        if (allParagraphs.length > 0 && !allParagraphs[0].querySelector('a')) {
+          allParagraphs[0].outerHTML = `<h1>${allParagraphs[0].innerHTML}</h1>`;
+        }
+        if (allParagraphs.length > 1 && !allParagraphs[1].querySelector('a')) {
+          allParagraphs[1].outerHTML = `<h2>${allParagraphs[1].innerHTML}</h2>`;
+        }
 
         const processedBody = doc.querySelector('div').innerHTML;
 
-        // 3. Struttura del documento HTML finale (senza codice o stili per le immagini)
+        // 4. Output strutturato finale (Solo testo e link)
         htmlDataRef.current = `<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -98,10 +103,8 @@ export default function Home() {
     <title>Output Formattato</title>
     <style>
         body { font-family: Arial, sans-serif; line-height: 1.6; color: #333333; max-width: 800px; margin: 0 auto; padding: 20px; }
-        h1 { font-size: 24px; margin-bottom: 5px; }
+        h1 { font-size: 24px; margin-bottom: 15px; color: #111; }
         h2 { font-size: 18px; font-weight: normal; color: #555555; margin-top: 0; margin-bottom: 20px; }
-        .meta { font-weight: bold; margin-bottom: 5px; }
-        .category { text-transform: uppercase; font-size: 14px; color: #666666; margin-bottom: 20px; }
         p { margin-bottom: 15px; text-align: justify; }
         .red-link { color: #FF0000; text-decoration: none; font-weight: bold; }
         .red-link:hover { text-decoration: underline; }
@@ -128,7 +131,7 @@ export default function Home() {
     <main style={{ fontFamily: 'sans-serif', maxWidth: '600px', margin: '60px auto', padding: '0 20px' }}>
       <h1 style={{ fontSize: '26px', marginBottom: '10px', color: '#111' }}>Word to HTML Converter</h1>
       <p style={{ color: '#666', marginBottom: '30px', fontSize: '15px' }}>
-        Converti i tuoi file .docx in codice HTML pulito con link ipertestuali incorporati pronti per l'editor.
+        Carica un file .docx. Lo script rileva le parole scritte in rosso, incorpora l'URL adiacente e rimuove il testo del link visibile.
       </p>
       
       <div 
@@ -155,9 +158,9 @@ export default function Home() {
           style={{ display: 'none' }}
         />
         <span style={{ display: 'block', fontSize: '17px', fontWeight: 'bold', color: '#0070f3', marginBottom: '5px' }}>
-          {isProcessing ? 'Elaborazione...' : 'Seleziona o trascina il file Word'}
+          {isProcessing ? 'Elaborazione in corso...' : 'Seleziona o trascina il file Word'}
         </span>
-        <span style={{ fontSize: '13px', color: '#888' }}>Supporta esclusivamente file .docx</span>
+        <span style={{ fontSize: '13px', color: '#888' }}>Accetta esclusivamente file .docx</span>
       </div>
 
       {fileName && (
@@ -170,7 +173,7 @@ export default function Home() {
       {hasResult && (
         <div style={{ textAlign: 'center', marginTop: '10px' }}>
           <div style={{ padding: '15px', background: '#e6f4ea', color: '#137333', borderRadius: '8px', fontWeight: 'bold', marginBottom: '20px', fontSize: '15px' }}>
-            ✓ Conversione completata con successo!
+            ✓ Conversione completata!
           </div>
           <button 
             onClick={() => {
@@ -198,7 +201,7 @@ export default function Home() {
               width: '100%'
             }}
           >
-            Scarica il file .html pronto
+            Scarica l'HTML pulito
           </button>
         </div>
       )}
