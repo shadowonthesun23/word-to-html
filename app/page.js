@@ -13,6 +13,7 @@ export default function Home() {
     if (!file) return;
 
     setFileName(file.name);
+    setIsProcessing(false);
     setIsProcessing(true);
 
     const reader = new FileReader();
@@ -20,25 +21,17 @@ export default function Home() {
       const arrayBuffer = event.target.result;
 
       try {
-        // Estrazione dell'HTML grezzo dal file DOCX usando mammoth
         const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
         let rawHtml = result.value;
 
-        // Elaborazione del testo per convertire i pattern "Nome URL" in link ipertestuali puliti
-        // Cerca link testuali espliciti nel codice
-        const urlRegex = /(https?:\/\/[^\s<]+)/g;
-        
-        // Pulizia e formattazione semantica specifica
-        // 1. Identificazione dei blocchi di testo e metadati basati sui pattern del testo
+        // 1. Formattazione Strutturale e Semantica dei metadati
         rawHtml = rawHtml.replace(/<p>Nell’archivio([^<]+)<\/p>/g, '<h1>Nell’archivio$1</h1>');
         rawHtml = rawHtml.replace(/<p>Un terrazzo([^<]+)<\/p>/g, '<h2>Un terrazzo$1</h2>');
-        
-        // Metadati fissi dell'autore e della data
         rawHtml = rawHtml.replace(/<p>(Laura De Luca)<\/p>/g, '<div class="meta">$1</div>');
         rawHtml = rawHtml.replace(/<p>(\d{1,2}\s\w+\s\d{4})<\/p>/g, '<div class="meta">$1</div>');
         rawHtml = rawHtml.replace(/<p>(IERI OGGI, LETTURE)<\/p>/g, '<div class="category">$1</div>');
 
-        // Gestione del segnaposto immagine e didascalia consecutiva
+        // Gestione dell'immagine e della didascalia consecutiva
         rawHtml = rawHtml.replace(/<p>\[Image \d+\]<\/p>\s*<p>(Immagine di copertina:[^<]+)<\/p>/g, 
           `<div class="image-container">
               <img src="copertina.jpg" alt="Immagine di copertina">
@@ -46,27 +39,42 @@ export default function Home() {
            </div>`
         );
 
-        // 2. Parsificazione dei link in rosso adiacenti al testo
-        // Questo ciclo intercetta gli URL e li sposta all'interno della stringa/parola precedente
-        let matches;
-        while ((matches = urlRegex.exec(rawHtml)) !== null) {
-          const matchedUrl = matches[0];
-          const cleanUrl = matchedUrl.replace(/[)., ]$/, ''); // Rimozione di eventuale punteggiatura finale
+        // 2. Parsificazione dinamica dei Link
+        // Questa espressione regolare estrae il testo precedente e l'URL adiacente all'interno dello stesso paragrafo
+        const paragraphRegex = /<p>(.*?)(https?:\/\/[^\s<]+)(.*?)<\/p>/g;
+        
+        rawHtml = rawHtml.replace(paragraphRegex, (match, beforeText, url, afterText) => {
+          const cleanUrl = url.replace(/[)., ]$/, ''); // Pulisce l'URL da eventuale punteggiatura finale
+          
+          // Estraiamo l'ancora del link (il nome). Cerchiamo di isolare le ultime parole significative prima dell'URL
+          let nomeLink = beforeText.trim();
+          let testoPrecedente Residuo = "";
 
-          // Isola i pattern specifici noti nel testo per rimpiazzarli accuratamente
-          if (rawHtml.includes(`un libro ${matchedUrl}`)) {
-            rawHtml = rawHtml.replace(`un libro ${matchedUrl}`, `<a href="${cleanUrl}" class="red-link" target="_blank">un libro</a>`);
-          } else if (rawHtml.includes(`Gustaw Herling ${matchedUrl}`)) {
-            rawHtml = rawHtml.replace(`Gustaw Herling ${matchedUrl}`, `<a href="${cleanUrl}" class="red-link" target="_blank">Gustaw Herling</a>`);
-          } else if (rawHtml.includes(`sito di Laura De Luca ${matchedUrl}`)) {
-            rawHtml = rawHtml.replace(`sito di Laura De Luca ${matchedUrl}`, `<a href="${cleanUrl}" class="red-link" target="_blank">sito di Laura De Luca</a>`);
+          // Gestione delle eccezioni per i pattern noti nel testo
+          if (nomeLink.endsWith("un libro")) {
+            testoPrecedenteResiduo = nomeLink.slice(0, -8);
+            nomeLink = "un libro";
+          } else if (nomeLink.endsWith("Gustaw Herling")) {
+            testoPrecedenteResiduo = nomeLink.slice(0, -14);
+            nomeLink = "Gustaw Herling";
+          } else if (nomeLink.endsWith("sito di Laura De Luca")) {
+            testoPrecedenteResiduo = nomeLink.slice(0, -21);
+            nomeLink = "sito di Laura De Luca";
           } else {
-            // Fallback generico se la corrispondenza esatta fallisce: converte il link testuale in ipertesto
-            rawHtml = rawHtml.replace(matchedUrl, `<a href="${cleanUrl}" class="red-link" target="_blank">Link</a>`);
+            // Algoritmo di fallback generico: prende le ultime 4 parole del testo prima del link
+            const words = nomeLink.split(' ');
+            if (words.length > 4) {
+              nomeLink = words.slice(-4).join(' ');
+              testoPrecedenteResiduo = words.slice(0, -4).join(' ') + ' ';
+            } else {
+              testoPrecedenteResiduo = "";
+            }
           }
-        }
 
-        // Assemblaggio della pagina HTML finale auto-contenitiva con stili inclusi
+          return `<p>${testoPrecedenteResiduo}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}</p>`;
+        });
+
+        // 3. Generazione del documento HTML finale auto-contenitivo
         const finalHtml = `<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -144,18 +152,4 @@ export default function Home() {
             <h3 style={{ margin: 0 }}>Codice HTML Generato</h3>
             <button 
               onClick={handleDownload}
-              style={{ background: '#0070f3', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}
-            >
-              Scarica file .html
-            </button>
-          </div>
-          <textarea
-            readOnly
-            value={htmlOutput}
-            style={{ width: '100%', height: '350px', fontFamily: 'monospace', padding: '15px', borderRadius: '5px', border: '1px solid #ccc', boxSizing: 'border-box', background: '#fff' }}
-          />
-        </div>
-      )}
-    </main>
-  );
-}
+              style={{ background: '#0070f3', color: 'white',
