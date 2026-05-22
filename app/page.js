@@ -43,27 +43,30 @@ export default function Home() {
            </div>`
         );
 
-        // 2. PARSING DEI LINK OTTIMIZZATO (Elimina il blocco del browser)
-        // Usiamo un approccio basato sul DOM virtuale del browser invece delle regex pesanti
+        // 2. PARSING DEI LINK LINEARE (Previene i blocchi del browser)
         const parser = new DOMParser();
         const doc = parser.parseFromString(`<div>${rawHtml}</div>`, 'text/html');
         const paragraphs = doc.querySelectorAll('p');
 
         paragraphs.forEach((p) => {
-          const text = p.innerHTML;
-          // Trova solo la stringa dell'URL
-          const urlMatch = text.match(/https?:\/\/[^\s<]+/);
+          const plainText = p.textContent;
+          // Regex ultra-leggera per trovare l'URL nel testo pulito
+          const urlMatch = plainText.match(/https?:\/\/[^\s]+/);
           
           if (urlMatch) {
             const fullUrl = urlMatch[0];
-            const cleanUrl = fullUrl.replace(/[)., ]$/, ''); // Pulisce l'URL dalla punteggiatura finale
+            // Pulisce l'URL da punteggiatura finale attaccata (es. parentesi o punti)
+            const cleanUrl = fullUrl.replace(/[)., ]$/, ''); 
             
-            // Isola la parte di testo prima dell'URL per identificare il nome
-            let beforeText = text.split(fullUrl)[0].trim();
-            let cleanBefore = "";
-            let nomeLink = beforeText;
+            // Trova la posizione dell'URL nel testo puro
+            const urlIndex = plainText.indexOf(fullUrl);
+            const beforeText = plainText.substring(0, urlIndex).trim();
+            const afterText = plainText.substring(urlIndex + fullUrl.length);
 
-            // Rilevamento delle ancore ipertestuali note
+            let nomeLink = beforeText;
+            let cleanBefore = "";
+
+            // Riconoscimento delle ancore ipertestuali
             if (beforeText.endsWith("un libro")) {
               cleanBefore = beforeText.slice(0, -8);
               nomeLink = "un libro";
@@ -74,7 +77,7 @@ export default function Home() {
               cleanBefore = beforeText.slice(0, -21);
               nomeLink = "sito di Laura De Luca";
             } else {
-              // Fallback: isola le ultime parole
+              // Fallback: isola le ultime parole prima del link
               const words = beforeText.split(' ');
               if (words.length > 4) {
                 nomeLink = words.slice(-4).join(' ');
@@ -84,8 +87,7 @@ export default function Home() {
               }
             }
 
-            const afterText = text.split(fullUrl)[1] || "";
-            // Ricostruisce il paragrafo con il link incorporato
+            // Ricostruisce il paragrafo in modo sicuro senza rompere stringhe HTML
             p.innerHTML = `${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}`;
           }
         });
@@ -129,7 +131,6 @@ export default function Home() {
     reader.readAsArrayBuffer(file);
   };
 
-  // Gestori eventi per il Drag and Drop funzionante
   const handleDragOver = (e) => {
     e.preventDefault();
     setIsDragOver(true);
@@ -147,6 +148,7 @@ export default function Home() {
   };
 
   const handleDownload = () => {
+    if (!htmlOutput) return;
     const blob = new Blob([htmlOutput], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
