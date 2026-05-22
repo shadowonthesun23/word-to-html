@@ -9,7 +9,6 @@ export default function Home() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [hasResult, setHasResult] = useState(false);
   
-  // Usiamo un Ref per conservare l'HTML senza scatenare i re-render di React che bloccano il browser
   const htmlDataRef = useRef('');
   const fileInputRef = useRef(null);
 
@@ -32,34 +31,28 @@ export default function Home() {
         const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
         let rawHtml = result.value;
 
-        // 1. Formattazione strutturale dei metadati
+        // 1. Assegnazione delle classi strutturali base alle righe note
         rawHtml = rawHtml.replace(/<p>Nell’archivio([^<]+)<\/p>/g, '<h1>Nell’archivio$1</h1>');
         rawHtml = rawHtml.replace(/<p>Un terrazzo([^<]+)<\/p>/g, '<h2>Un terrazzo$1</h2>');
         rawHtml = rawHtml.replace(/<p>(Laura De Luca)<\/p>/g, '<div class="meta">$1</div>');
         rawHtml = rawHtml.replace(/<p>(\d{1,2}\s\w+\s\d{4})<\/p>/g, '<div class="meta">$1</div>');
         rawHtml = rawHtml.replace(/<p>(IERI OGGI, LETTURE)<\/p>/g, '<div class="category">$1</div>');
 
-        // Gestione blocco immagine e didascalia
-        rawHtml = rawHtml.replace(/<p>\[Image \d+\]<\/p>\s*<p>(Immagine di copertina:[^<]+)<\/p>/g, 
-          `<div class="image-container">
-              <img src="copertina.jpg" alt="Immagine di copertina">
-              <div class="caption">$1</div>
-           </div>`
-        );
-
-        // 2. Parsing dei link nativo ultra-veloce (senza cicli annidati o split pesanti)
+        // 2. PARSING DI QUALSIASI LINK (Titoli, sottotitoli o paragrafi)
         const parser = new DOMParser();
         const doc = parser.parseFromString(`<div>${rawHtml}</div>`, 'text/html');
-        const paragraphs = doc.querySelectorAll('p');
+        
+        // Seleziona tutti gli elementi di testo generati da Word
+        const elements = doc.querySelectorAll('p, h1, h2, div.meta, div.category');
 
-        for (let i = 0; i < paragraphs.length; i++) {
-          const p = paragraphs[i];
-          const text = p.textContent;
+        elements.forEach((el) => {
+          const text = el.textContent;
+          // Individua la presenza di un URL
           const urlMatch = text.match(/https?:\/\/[^\s]+/);
           
           if (urlMatch) {
             const fullUrl = urlMatch[0];
-            const cleanUrl = fullUrl.replace(/[)., ]$/, '');
+            const cleanUrl = fullUrl.replace(/[)., ]$/, ''); // Rimuove punteggiatura finale dall'URL
             const urlIndex = text.indexOf(fullUrl);
             
             const beforeText = text.substring(0, urlIndex).trim();
@@ -68,6 +61,7 @@ export default function Home() {
             let nomeLink = beforeText;
             let cleanBefore = "";
 
+            // Gestione intelligente dell'ancora del link basata sul testo precedente
             if (beforeText.endsWith("un libro")) {
               cleanBefore = beforeText.slice(0, -8);
               nomeLink = "un libro";
@@ -78,22 +72,25 @@ export default function Home() {
               cleanBefore = beforeText.slice(0, -21);
               nomeLink = "sito di Laura De Luca";
             } else {
+              // Se l'URL segue un intero titolo o una frase, usa le ultime parole o tutto il frammento precedente
               const words = beforeText.split(' ');
               if (words.length > 4) {
                 nomeLink = words.slice(-4).join(' ');
                 cleanBefore = words.slice(0, -4).join(' ') + ' ';
               } else {
                 cleanBefore = "";
+                nomeLink = beforeText;
               }
             }
 
-            p.innerHTML = `${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}`;
+            // Ricostruisce il tag iniettando il link incorporato ed eliminando l'URL visibile
+            el.innerHTML = `${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}`;
           }
-        }
+        });
 
         const processedBody = doc.querySelector('div').innerHTML;
 
-        // 3. Generazione del codice finale pronto all'uso
+        // 3. Struttura del documento HTML finale (senza codice o stili per le immagini)
         htmlDataRef.current = `<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -105,9 +102,6 @@ export default function Home() {
         h2 { font-size: 18px; font-weight: normal; color: #555555; margin-top: 0; margin-bottom: 20px; }
         .meta { font-weight: bold; margin-bottom: 5px; }
         .category { text-transform: uppercase; font-size: 14px; color: #666666; margin-bottom: 20px; }
-        .image-container { margin: 20px 0; text-align: center; }
-        .image-container img { max-width: 100%; height: auto; display: block; margin: 0 auto 10px auto; }
-        .caption { font-size: 14px; color: #666666; font-style: italic; text-align: left; }
         p { margin-bottom: 15px; text-align: justify; }
         .red-link { color: #FF0000; text-decoration: none; font-weight: bold; }
         .red-link:hover { text-decoration: underline; }
@@ -130,35 +124,6 @@ export default function Home() {
     reader.readAsArrayBuffer(file);
   };
 
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setIsDragOver(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragOver(false);
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    processFile(e.dataTransfer.files[0]);
-  };
-
-  const handleDownload = () => {
-    if (!htmlDataRef.current) return;
-    
-    const blob = new Blob([htmlDataRef.current], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName.replace('.docx', '.html') || 'pagina_formattata.html';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   return (
     <main style={{ fontFamily: 'sans-serif', maxWidth: '600px', margin: '60px auto', padding: '0 20px' }}>
       <h1 style={{ fontSize: '26px', marginBottom: '10px', color: '#111' }}>Word to HTML Converter</h1>
@@ -167,9 +132,9 @@ export default function Home() {
       </p>
       
       <div 
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+        onDragLeave={() => setIsDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setIsDragOver(false); processFile(e.dataTransfer.files[0]); }}
         onClick={() => fileInputRef.current.click()}
         style={{ 
           border: isDragOver ? '2px dashed #0070f3' : '2px dashed #ccc', 
@@ -190,7 +155,7 @@ export default function Home() {
           style={{ display: 'none' }}
         />
         <span style={{ display: 'block', fontSize: '17px', fontWeight: 'bold', color: '#0070f3', marginBottom: '5px' }}>
-          {isProcessing ? 'Elaborazione istantanea...' : 'Seleziona o trascina il file Word'}
+          {isProcessing ? 'Elaborazione...' : 'Seleziona o trascina il file Word'}
         </span>
         <span style={{ fontSize: '13px', color: '#888' }}>Supporta esclusivamente file .docx</span>
       </div>
@@ -208,7 +173,18 @@ export default function Home() {
             ✓ Conversione completata con successo!
           </div>
           <button 
-            onClick={handleDownload}
+            onClick={() => {
+              if (!htmlDataRef.current) return;
+              const blob = new Blob([htmlDataRef.current], { type: 'text/html;charset=utf-8' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = fileName.replace('.docx', '.html') || 'pagina_formattata.html';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            }}
             style={{ 
               background: '#0070f3', 
               color: 'white', 
