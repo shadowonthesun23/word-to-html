@@ -4,10 +4,13 @@ import { useState, useRef } from 'react';
 import mammoth from 'mammoth';
 
 export default function Home() {
-  const [htmlOutput, setHtmlOutput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [fileName, setFileName] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
+  const [hasResult, setHasResult] = useState(false);
+  
+  // Usiamo un Ref per conservare l'HTML senza scatenare i re-render di React che bloccano il browser
+  const htmlDataRef = useRef('');
   const fileInputRef = useRef(null);
 
   const processFile = async (file) => {
@@ -18,51 +21,25 @@ export default function Home() {
 
     setFileName(file.name);
     setIsProcessing(true);
-    setHtmlOutput('');
+    setHasResult(false);
+    htmlDataRef.current = '';
 
     const reader = new FileReader();
     reader.onload = async (event) => {
       const arrayBuffer = event.target.result;
 
       try {
-        // Opzioni di conversione per ripulire i testi dai link visibili duplicati
-        const options = {
-          transformDocument: (element) => {
-            if (element.children) {
-              element.children = element.children.map(child => {
-                // Se un paragrafo contiene un link testuale esplicito, puliamo il testo visibile redundante
-                if (child.type === "paragraph") {
-                  const fullText = child.children.map(c => c.value || "").join("");
-                  const urlMatch = fullText.match(/https?:\/\/[^\s]+/);
-                  
-                  if (urlMatch) {
-                    const urlStr = urlMatch[0];
-                    child.children.forEach(run => {
-                      if (run.value && run.value.includes(urlStr)) {
-                        // Rimuoviamo l'URL visibile dal testo puro del Word
-                        run.value = run.value.replace(urlStr, "").trim();
-                      }
-                    });
-                  }
-                }
-                return child;
-              });
-            }
-            return element;
-          }
-        };
-
-        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer }, options);
+        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
         let rawHtml = result.value;
 
-        // 1. Formattazione dei metadati e dei titoli principali
+        // 1. Formattazione strutturale dei metadati
         rawHtml = rawHtml.replace(/<p>Nell’archivio([^<]+)<\/p>/g, '<h1>Nell’archivio$1</h1>');
         rawHtml = rawHtml.replace(/<p>Un terrazzo([^<]+)<\/p>/g, '<h2>Un terrazzo$1</h2>');
         rawHtml = rawHtml.replace(/<p>(Laura De Luca)<\/p>/g, '<div class="meta">$1</div>');
         rawHtml = rawHtml.replace(/<p>(\d{1,2}\s\w+\s\d{4})<\/p>/g, '<div class="meta">$1</div>');
         rawHtml = rawHtml.replace(/<p>(IERI OGGI, LETTURE)<\/p>/g, '<div class="category">$1</div>');
 
-        // Gestione blocco immagine e relativa didascalia consecutiva
+        // Gestione blocco immagine e didascalia
         rawHtml = rawHtml.replace(/<p>\[Image \d+\]<\/p>\s*<p>(Immagine di copertina:[^<]+)<\/p>/g, 
           `<div class="image-container">
               <img src="copertina.jpg" alt="Immagine di copertina">
@@ -70,20 +47,23 @@ export default function Home() {
            </div>`
         );
 
-        // 2. PARSING DEI LINK PULITO SENZA SPLIT O LOOP COMPLESSI
+        // 2. Parsing dei link nativo ultra-veloce (senza cicli annidati o split pesanti)
         const parser = new DOMParser();
         const doc = parser.parseFromString(`<div>${rawHtml}</div>`, 'text/html');
-        
-        // Estraiamo tutti i paragrafi che contengono ancora un residuo di URL o l'intera riga
-        doc.querySelectorAll('p').forEach((p) => {
-          const text = p.innerHTML;
-          const urlMatch = text.match(/https?:\/\/[^\s<]+/);
+        const paragraphs = doc.querySelectorAll('p');
+
+        for (let i = 0; i < paragraphs.length; i++) {
+          const p = paragraphs[i];
+          const text = p.textContent;
+          const urlMatch = text.match(/https?:\/\/[^\s]+/);
           
           if (urlMatch) {
             const fullUrl = urlMatch[0];
             const cleanUrl = fullUrl.replace(/[)., ]$/, '');
-            let beforeText = text.substring(0, text.indexOf(fullUrl)).trim();
-            let afterText = text.substring(text.indexOf(fullUrl) + fullUrl.length);
+            const urlIndex = text.indexOf(fullUrl);
+            
+            const beforeText = text.substring(0, urlIndex).trim();
+            const afterText = text.substring(urlIndex + fullUrl.length);
 
             let nomeLink = beforeText;
             let cleanBefore = "";
@@ -109,12 +89,12 @@ export default function Home() {
 
             p.innerHTML = `${cleanBefore}<a href="${cleanUrl}" class="red-link" target="_blank">${nomeLink}</a>${afterText}`;
           }
-        });
+        }
 
         const processedBody = doc.querySelector('div').innerHTML;
 
-        // 3. Generazione del documento HTML finale pronto per il download
-        const finalHtml = `<!DOCTYPE html>
+        // 3. Generazione del codice finale pronto all'uso
+        htmlDataRef.current = `<!DOCTYPE html>
 <html lang="it">
 <head>
     <meta charset="UTF-8">
@@ -138,9 +118,9 @@ export default function Home() {
 </body>
 </html>`;
 
-        setHtmlOutput(finalHtml);
+        setHasResult(true);
       } catch (error) {
-        console.error("Errore durante la conversione:", error);
+        console.error("Errore di conversione:", error);
         alert("Errore durante l'elaborazione del file .docx");
       } finally {
         setIsProcessing(false);
@@ -162,13 +142,13 @@ export default function Home() {
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragOver(false);
-    const file = e.dataTransfer.files[0];
-    processFile(file);
+    processFile(e.dataTransfer.files[0]);
   };
 
   const handleDownload = () => {
-    if (!htmlOutput) return;
-    const blob = new Blob([htmlOutput], { type: 'text/html;charset=utf-8' });
+    if (!htmlDataRef.current) return;
+    
+    const blob = new Blob([htmlDataRef.current], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -180,9 +160,11 @@ export default function Home() {
   };
 
   return (
-    <main style={{ fontFamily: 'sans-serif', maxWidth: '700px', margin: '40px auto', padding: '0 20px' }}>
-      <h1 style={{ fontSize: '28px', marginBottom: '10px' }}>Word to HTML Converter</h1>
-      <p style={{ color: '#666', marginBottom: '30px' }}>Carica un file .docx per convertirlo in codice HTML pulito con link ipertestuali incorporati.</p>
+    <main style={{ fontFamily: 'sans-serif', maxWidth: '600px', margin: '60px auto', padding: '0 20px' }}>
+      <h1 style={{ fontSize: '26px', marginBottom: '10px', color: '#111' }}>Word to HTML Converter</h1>
+      <p style={{ color: '#666', marginBottom: '30px', fontSize: '15px' }}>
+        Converti i tuoi file .docx in codice HTML pulito con link ipertestuali incorporati pronti per l'editor.
+      </p>
       
       <div 
         onDragOver={handleDragOver}
@@ -191,11 +173,11 @@ export default function Home() {
         onClick={() => fileInputRef.current.click()}
         style={{ 
           border: isDragOver ? '2px dashed #0070f3' : '2px dashed #ccc', 
-          padding: '40px', 
+          padding: '50px 20px', 
           textAlign: 'center', 
-          borderRadius: '8px', 
-          background: isDragOver ? '#f0f7ff' : '#f9f9f9', 
-          marginBottom: '20px',
+          borderRadius: '12px', 
+          background: isDragOver ? '#f0f7ff' : '#fafafa', 
+          marginBottom: '25px',
           cursor: 'pointer',
           transition: 'background 0.15s ease, border-color 0.15s ease'
         }}
@@ -207,30 +189,41 @@ export default function Home() {
           onChange={(e) => processFile(e.target.files[0])} 
           style={{ display: 'none' }}
         />
-        <span style={{ display: 'block', fontSize: '18px', fontWeight: 'bold', color: '#0070f3', marginBottom: '5px' }}>
-          {isProcessing ? 'Elaborazione in corso...' : 'Seleziona o trascina il file Word'}
+        <span style={{ display: 'block', fontSize: '17px', fontWeight: 'bold', color: '#0070f3', marginBottom: '5px' }}>
+          {isProcessing ? 'Elaborazione istantanea...' : 'Seleziona o trascina il file Word'}
         </span>
-        <span style={{ fontSize: '14px', color: '#888' }}>Accetta solo formati .docx</span>
+        <span style={{ fontSize: '13px', color: '#888' }}>Supporta esclusivamente file .docx</span>
       </div>
 
-      {fileName && <p style={{ fontSize: '14px', marginBottom: '20px' }}><strong>File:</strong> {fileName}</p>}
+      {fileName && (
+        <div style={{ background: '#f0f0f0', padding: '12px 15px', borderRadius: '6px', fontSize: '14px', marginBottom: '25px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span><strong>File:</strong> {fileName}</span>
+          {isProcessing && <span style={{ color: '#0070f3', fontWeight: 'bold' }}>Elaborazione...</span>}
+        </div>
+      )}
 
-      {htmlOutput && (
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <h3 style={{ margin: 0 }}>Codice HTML Generato</h3>
-            <button 
-              onClick={handleDownload}
-              style={{ background: '#0070f3', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}
-            >
-              Scarica file .html
-            </button>
+      {hasResult && (
+        <div style={{ textAlign: 'center', marginTop: '10px' }}>
+          <div style={{ padding: '15px', background: '#e6f4ea', color: '#137333', borderRadius: '8px', fontWeight: 'bold', marginBottom: '20px', fontSize: '15px' }}>
+            ✓ Conversione completata con successo!
           </div>
-          <textarea
-            readOnly
-            value={htmlOutput}
-            style={{ width: '100%', height: '350px', fontFamily: 'monospace', padding: '15px', borderRadius: '5px', border: '1px solid #ccc', boxSizing: 'border-box', background: '#fff' }}
-          />
+          <button 
+            onClick={handleDownload}
+            style={{ 
+              background: '#0070f3', 
+              color: 'white', 
+              border: 'none', 
+              padding: '14px 40px', 
+              borderRadius: '8px', 
+              cursor: 'pointer', 
+              fontWeight: 'bold',
+              fontSize: '16px',
+              boxShadow: '0 4px 14px rgba(0, 112, 243, 0.3)',
+              width: '100%'
+            }}
+          >
+            Scarica il file .html pronto
+          </button>
         </div>
       )}
     </main>
